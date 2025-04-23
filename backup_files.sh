@@ -6,6 +6,7 @@
 backupDirectoryMount="/backup" # This should be a separate mount!
 currentLink="current"
 lastFullBackupMarker="last_full_backup_date.txt"
+lastIncrementalBackupMarker="last_incremental_backup_date.txt"
 backupExcludeFile="backup_exclude.txt"
 backupProcessUmask="0002"
 
@@ -66,6 +67,7 @@ cleanupOldBackups() {
     _maxAge="$2"
     # Full backups mast be kept a week more. Without it incremental backups make no sense.
     _maxFullAge=$((${_maxAge} + 6 ))
+    _maxIncrementalAge=$((${_maxAge} + 6 ))
 
     if [ "${#_directoryToClean}" -lt "${minBackupPathLength}" ]; then
         show "ERROR: Skipping cleanup process. Hardcoded directory path '${_directoryToClean}' is too short!"
@@ -73,8 +75,10 @@ cleanupOldBackups() {
         show "ERROR: Skipping cleanup process. Given max age '${_maxAge}' is less than '${minBackupMaxAge}' days!"
     else
         show "Removing more than '${_maxAge}' days old incremental backup files from '${_directoryToClean}'."
-        find "${_directoryToClean}" -type f -name "*${incrementalBackupSuffix}" -mtime +${_maxAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-        find "${_directoryToClean}" -type f -name "*${incrementalBackupLogSuffix}*" -mtime +${_maxAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "*${incrementalBackupSuffix}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "*${incrementalBackupLogSuffix}*" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "${lastIncrementalBackupMarker}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+
 
         show "Removing more than '${_maxFullAge}' days old full backup files from '${_directoryToClean}'."
         find "${_directoryToClean}" -type f -name "*${fullBackupSuffix}" -mtime +${_maxFullAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
@@ -107,9 +111,11 @@ fullBackup() {
     rm -f "${_currentLinkPointer}"
     ln -s "${_where}" "${_currentLinkPointer}"
 
+    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}"
+
+    #TODO: update marker only when backup was created successfully
     echo "${_backupMarker}" > "${_currentLinkPointer}/${lastFullBackupMarker}"
 
-    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}"
 }
 
 incrementalBackup() {
@@ -119,11 +125,21 @@ incrementalBackup() {
     _whatName=$( basename "${_what}" )
     _currentLinkPointer="${_whereParent}/${currentLink}"
     _lastFullBackupDate=$( cat "${_currentLinkPointer}/${lastFullBackupMarker}" )
+    _lastIncrementalBackupDate=$( cat "${_currentLinkPointer}/${lastIncrementalBackupMarker}" 2>/dev/null )
+    _backupMarker="$( date +'%Y-%m-%d %H:%M:%S' )"
     _backupPrefix="$( date +'%Y%m%d_%H%M%S' )"
     _backupName="${_backupPrefix}_${_whatName}_${incrementalBackupSuffix}"
     _backupLogName="${_backupPrefix}_${_whatName}_${incrementalBackupLogSuffix}"
 
-    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}" "${_lastFullBackupDate}"
+    _lastBackupDate="${_lastIncrementalBackupDate}"
+    if [ -z "${_lastBackupDate}" ]; then
+        _lastBackupDate="${_lastFullBackupDate}"
+    fi
+
+    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}" "${_lastBackupDate}"
+
+    #TODO: update marker only when backup was created successfully
+    echo "${_backupMarker}" > "${_currentLinkPointer}/${lastIncrementalBackupMarker}"
 }
 
 createBackup() {

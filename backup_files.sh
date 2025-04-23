@@ -16,6 +16,7 @@ minBackupMaxAge=7 # It does not make sense to set this less than 7
 
 fullBackupSuffix="full_backup.tar.bz2"
 fullBackupLogSuffix="full_backup.log"
+
 incrementalBackupSuffix="incremental_backup.tar.bz2"
 incrementalBackupLogSuffix="incremental_backup.log"
 
@@ -111,10 +112,11 @@ fullBackup() {
     rm -f "${_currentLinkPointer}"
     ln -s "${_where}" "${_currentLinkPointer}"
 
-    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}"
-
     #TODO: update marker only when backup was created successfully
     echo "${_backupMarker}" > "${_currentLinkPointer}/${lastFullBackupMarker}"
+
+    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}"
+
 
 }
 
@@ -136,10 +138,11 @@ incrementalBackup() {
         _lastBackupDate="${_lastFullBackupDate}"
     fi
 
-    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}" "${_lastBackupDate}"
-
     #TODO: update marker only when backup was created successfully
     echo "${_backupMarker}" > "${_currentLinkPointer}/${lastIncrementalBackupMarker}"
+
+    createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}" "${_lastBackupDate}"
+
 }
 
 createBackup() {
@@ -152,13 +155,22 @@ createBackup() {
     _backupFilePath="${_backupPath}/${_backupFile}"
     _backupLogPath="${_backupPath}/${_backupLog}"
 
-    _extraParameters=""
     if [ ! -z "${_filesAfterDate}" ]; then
-        _extraParameters="--after-date \"${_filesAfterDate}\""
+        _referenceFilePath="${_backupLogPath}.files_newer_than_marker"
+        _backupListPath="${_backupLogPath}.files_list.txt"
+
+        touch -d "${_filesAfterDate}" "${_referenceFilePath}"
+        find "${_sourcePath}" -type f -cnewer "${_referenceFilePath}" > "${_backupListPath}"
+        rm "${_referenceFilePath}"
+        command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" --files-from=\"${_backupListPath}\" > \"${_backupLogPath}\" 2>&1"
+        eval ${command}
+        rm "${_backupListPath}"
+
+    else
+        command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" \"${_sourcePath}\" > \"${_backupLogPath}\" 2>&1"
+        eval ${command}
     fi
 
-    command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read ${_extraParameters} -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" \"${_sourcePath}\" > \"${_backupLogPath}\" 2>&1"
-    eval ${command}
     lbzip2 "${_backupLogPath}"
     _backupSize=$( du -h "${_backupFilePath}" |awk '{print $1}' )
     show "Created '${_backupFilePath}', size '${_backupSize}'."

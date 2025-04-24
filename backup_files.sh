@@ -9,6 +9,7 @@ lastFullBackupMarker="last_full_backup_date.txt"
 lastIncrementalBackupMarker="last_incremental_backup_date.txt"
 backupExcludeFile="backup_exclude.txt"
 backupProcessUmask="0002"
+backupExcludeTag=".backup_exclude"
 
 fullBackupDayNumber=1
 minBackupPathLength=11 # We do not want to delete files from filesystem root
@@ -102,6 +103,7 @@ fullBackup() {
     _backupPrefix="$( date +'%Y%m%d_%H%M%S' )"
     _backupName="${_backupPrefix}_${_whatName}_${fullBackupSuffix}"
     _backupLogName="${_backupPrefix}_${_whatName}_${fullBackupLogSuffix}"
+    _backupMarkerPath="${_currentLinkPointer}/${lastFullBackupMarker}"
 
     # create backup directory
     if [ ! -d "${_where}" ]; then
@@ -112,12 +114,16 @@ fullBackup() {
     rm -f "${_currentLinkPointer}"
     ln -s "${_where}" "${_currentLinkPointer}"
 
-    #TODO: update marker only when backup was created successfully
-    echo "${_backupMarker}" > "${_currentLinkPointer}/${lastFullBackupMarker}"
+    echo "${_backupMarker}" > "${_backupMarkerPath}.tmp"
 
     createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}"
+    _resultCode=$?
 
-
+    if [[ ${_resultCode} = 0 ]]; then
+        mv "${_backupMarkerPath}.tmp" "${_backupMarkerPath}"
+    else
+        rm "${_backupMarkerPath}.tmp"
+    fi
 }
 
 incrementalBackup() {
@@ -126,23 +132,29 @@ incrementalBackup() {
     _whereParent=$( dirname "${_where}" )
     _whatName=$( basename "${_what}" )
     _currentLinkPointer="${_whereParent}/${currentLink}"
-    _lastFullBackupDate=$( cat "${_currentLinkPointer}/${lastFullBackupMarker}" )
+    _lastFullBackupDate=$( cat "${_currentLinkPointer}/${lastFullBackupMarker}" 2>/dev/null)
     _lastIncrementalBackupDate=$( cat "${_currentLinkPointer}/${lastIncrementalBackupMarker}" 2>/dev/null )
     _backupMarker="$( date +'%Y-%m-%d %H:%M:%S' )"
     _backupPrefix="$( date +'%Y%m%d_%H%M%S' )"
     _backupName="${_backupPrefix}_${_whatName}_${incrementalBackupSuffix}"
     _backupLogName="${_backupPrefix}_${_whatName}_${incrementalBackupLogSuffix}"
+    _backupMarkerPath="${_currentLinkPointer}/${lastIncrementalBackupMarker}"
 
     _lastBackupDate="${_lastIncrementalBackupDate}"
     if [ -z "${_lastBackupDate}" ]; then
         _lastBackupDate="${_lastFullBackupDate}"
     fi
 
-    #TODO: update marker only when backup was created successfully
-    echo "${_backupMarker}" > "${_currentLinkPointer}/${lastIncrementalBackupMarker}"
+    echo "${_backupMarker}" > "${_backupMarkerPath}.tmp"
 
     createBackup "${_what}" "${_where}" "${_backupName}" "${_backupLogName}" "${_lastBackupDate}"
+    _resultCode=$?
 
+    if [[ ${_resultCode} = 0 ]]; then 
+        mv "${_backupMarkerPath}.tmp" "${_backupMarkerPath}"
+    else
+        rm "${_backupMarkerPath}.tmp"
+    fi
 }
 
 createBackup() {
@@ -154,26 +166,49 @@ createBackup() {
 
     _backupFilePath="${_backupPath}/${_backupFile}"
     _backupLogPath="${_backupPath}/${_backupLog}"
+    _backupListPath="${_backupLogPath}.files_list.txt"
+
+    _excludeOptions=$( find "${_sourcePath}" -type f -name "${backupExcludeTag}" -printf "-not \\\( -path \"%h\" -prune \\\) " )
+    _excludeOptions="${_excludeOptions} -not \( -name \"lost+found\" -type d -prune \)"
 
     if [ ! -z "${_filesAfterDate}" ]; then
         _referenceFilePath="${_backupLogPath}.files_newer_than_marker"
-        _backupListPath="${_backupLogPath}.files_list.txt"
-
         touch -d "${_filesAfterDate}" "${_referenceFilePath}"
-        find "${_sourcePath}" -type f -cnewer "${_referenceFilePath}" > "${_backupListPath}"
-        rm "${_referenceFilePath}"
-        command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" --files-from=\"${_backupListPath}\" > \"${_backupLogPath}\" 2>&1"
-        eval ${command}
-        rm "${_backupListPath}"
 
-    else
-        command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" \"${_sourcePath}\" > \"${_backupLogPath}\" 2>&1"
+        command="find \"${_sourcePath}\" ${_excludeOptions} -type f,l -cnewer \"${_referenceFilePath}\" > \"${_backupListPath}\""
         eval ${command}
+
+        rm "${_referenceFilePath}"
+    else
+        command="find \"${_sourcePath}\" ${_excludeOptions} -type f,l > \"${_backupListPath}\""
+        eval ${command}
+    fi
+
+    command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read --exclude-tag-all=\"${backupExcludeTag}\" -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" --files-from=\"${_backupListPath}\" > \"${_backupLogPath}\" 2>&1"
+    eval ${command}
+    _tarResult=$?
+    rm "${_backupListPath}"
+
+    if [[ ${_tarResult} != 0 ]]; then
+        show "Failed to create backup archive \"${_backupFilePath}\""
+        mv "${_backupFilePath}" "${_backupFilePath}.error" 2>/dev/null
+        mv "${_backupLogPath}" "${_backupLogPath}.error" 2>/dev/null
+        return 2
+    fi
+
+    _backupFileContents=$( tar --list -f "${_backupFilePath}")
+    if [ -z "${_backupFileContents}" ]; then
+        show "Empty backup created, removing \"${_backupFilePath}\""
+        rm "${_backupFilePath}"
+        rm "${_backupLogPath}"
+        return 1
     fi
 
     lbzip2 "${_backupLogPath}"
     _backupSize=$( du -h "${_backupFilePath}" |awk '{print $1}' )
     show "Created '${_backupFilePath}', size '${_backupSize}'."
+
+    return 0
 }
 
 backupDirectory() {
@@ -239,7 +274,7 @@ fi
 cleanupOldBackups "${whatToCleanupPath}" "${keepBackupDays}"
 
 for directory in $directoriesToBackup; do
-    if [[ -d "${whatToBackupPath}/${directory}" ]] && [[ ! -L "${whatToBackupPath}/${directory}" ]] && [[ "${directory}" != "lost+found" ]]; then
+    if [[ -d "${whatToBackupPath}/${directory}" ]] && [[ ! -L "${whatToBackupPath}/${directory}" ]] && [[ "${directory}" != "lost+found" ]] && [[ ! -f "${whatToBackupPath}/${directory}/${backupExcludeTag}" ]]; then
         backupDirectory "$directory"
     fi
 done

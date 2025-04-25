@@ -71,16 +71,20 @@ cleanupOldBackups() {
     _maxFullAge=$((${_maxAge} + 6 ))
     _maxIncrementalAge=$((${_maxAge} + 6 ))
 
+    if [ ! -d "${_directoryToClean}" ]; then
+        show "Backup directory does not exist yet, skipping cleanup."
+        return 0
+    fi
+    
     if [ "${#_directoryToClean}" -lt "${minBackupPathLength}" ]; then
         show "ERROR: Skipping cleanup process. Hardcoded directory path '${_directoryToClean}' is too short!"
     elif [ -z "${_maxAge##*[!0-9]*}" ] || [ "${_maxAge}" -lt "${minBackupMaxAge}" ]; then
         show "ERROR: Skipping cleanup process. Given max age '${_maxAge}' is less than '${minBackupMaxAge}' days!"
     else
-        show "Removing more than '${_maxAge}' days old incremental backup files from '${_directoryToClean}'."
+        show "Removing more than '${_maxIncrementalAge}' days old incremental backup files from '${_directoryToClean}'."
         find "${_directoryToClean}" -type f -name "*${incrementalBackupSuffix}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
         find "${_directoryToClean}" -type f -name "*${incrementalBackupLogSuffix}*" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
         find "${_directoryToClean}" -type f -name "${lastIncrementalBackupMarker}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-
 
         show "Removing more than '${_maxFullAge}' days old full backup files from '${_directoryToClean}'."
         find "${_directoryToClean}" -type f -name "*${fullBackupSuffix}" -mtime +${_maxFullAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
@@ -91,6 +95,8 @@ cleanupOldBackups() {
         find "${_directoryToClean}" -type d -empty -delete
         find "${_directoryToClean}" -type l -exec sh -c '[ -h "$0" -a ! -e "$0" ] && rm -f "$0"' {} \;
     fi
+
+    return 0
 }
 
 fullBackup() {
@@ -184,7 +190,7 @@ createBackup() {
         eval ${command}
     fi
 
-    command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read --exclude-tag-all=\"${backupExcludeTag}\" -X \"${backupExcludeFilePath}\" -f \"${_backupFilePath}\" --files-from=\"${_backupListPath}\" > \"${_backupLogPath}\" 2>&1"
+    command="nice -n 19 tar -cpv -I lbzip2 --absolute-names --ignore-failed-read --exclude-tag-all=\"${backupExcludeTag}\" -f \"${_backupFilePath}\" -X \"${backupExcludeFilePath}\" --files-from=\"${_backupListPath}\" > \"${_backupLogPath}\" 2>&1"
     eval ${command}
     _tarResult=$?
     rm "${_backupListPath}"

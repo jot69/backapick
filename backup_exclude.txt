@@ -1,2 +1,3 @@
-/archive/muusika
-/archive/lost+found
+/tmp
+/var/tmp
+/var/log

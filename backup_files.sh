@@ -13,7 +13,7 @@ backupExcludeTag=".backup_exclude"
 
 fullBackupDayNumber=1
 minBackupPathLength=11 # We do not want to delete files from filesystem root
-minBackupMaxAge=7 # It does not make sense to set this less than 7
+minBackupMaxWeeksAge=1 # It does not make sense to set this less than 1 week
 
 fullBackupSuffix="full_backup.tar.bz2"
 fullBackupLogSuffix="full_backup.log"
@@ -25,7 +25,7 @@ incrementalBackupLogSuffix="incremental_backup.log"
 currentDirectory="$( cd $( dirname "$0" ); pwd; cd - >/dev/null )"
 currentFileName="$( basename "$0" )"
 backupExcludeFilePath="${currentDirectory}/${backupExcludeFile}"
-keepBackupDays="$1"
+keepBackupWeeks="$1"
 whatToBackupPath=$( realpath "$2" )
 directoryName="$3"
 
@@ -58,7 +58,7 @@ usage() {
     show "  This script backs up data in given directory and cleans up old backup files.\n"
     show "Usage:\n  ${currentFileName} <max_days_to_keep_backups> <what_to_backup_directory>"
     show "  Options:"
-    show "    max_days_to_keep_backups\t- Number of days, can't be less than '${minBackupMaxAge}'"
+    show "    max_weeks_to_keep_backups\t- Number of weeks, can't be less than '${minBackupMaxWeeksAge}'"
     show "    what_to_backup_directory\t- Full path to directory containing data folders"
     shoe "    what_dir_to_backup_exactly\t- Exact directory name inside what_to_backup_directory folder\n"
     quit 1
@@ -66,30 +66,28 @@ usage() {
 
 cleanupOldBackups() {
     _directoryToClean="$1"
-    _maxAge="$2"
-    # Full backups mast be kept a week more. Without it incremental backups make no sense.
-    _maxFullAge=$((${_maxAge} + 6 ))
-    _maxIncrementalAge=$((${_maxAge} + 6 ))
+    _maxWeeksAge="$2"
+    _maxDaysAge=$((${_maxWeeksAge} * 7 + $( date +"%u" ) - 1))
 
     if [ ! -d "${_directoryToClean}" ]; then
         show "Backup directory does not exist yet, skipping cleanup."
         return 0
     fi
-    
+
     if [ "${#_directoryToClean}" -lt "${minBackupPathLength}" ]; then
         show "ERROR: Skipping cleanup process. Hardcoded directory path '${_directoryToClean}' is too short!"
-    elif [ -z "${_maxAge##*[!0-9]*}" ] || [ "${_maxAge}" -lt "${minBackupMaxAge}" ]; then
-        show "ERROR: Skipping cleanup process. Given max age '${_maxAge}' is less than '${minBackupMaxAge}' days!"
+    elif [ -z "${_maxWeeksAge##*[!0-9]*}" ] || [ "${_maxWeeksAge}" -lt "${minBackupMaxWeeksAge}" ]; then
+        show "ERROR: Skipping cleanup process. Given max weeks age '${_maxWeeksAge}' is less than '${minBackupMaxWeeksAge}' weeks!"
     else
-        show "Removing more than '${_maxIncrementalAge}' days old incremental backup files from '${_directoryToClean}'."
-        find "${_directoryToClean}" -type f -name "*${incrementalBackupSuffix}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-        find "${_directoryToClean}" -type f -name "*${incrementalBackupLogSuffix}*" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-        find "${_directoryToClean}" -type f -name "${lastIncrementalBackupMarker}" -mtime +${_maxIncrementalAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        show "Removing more than '${_maxDaysAge}' days old incremental backup files from '${_directoryToClean}'."
+        find "${_directoryToClean}" -type f -name "*${incrementalBackupSuffix}" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "*${incrementalBackupLogSuffix}*" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "${lastIncrementalBackupMarker}" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
 
-        show "Removing more than '${_maxFullAge}' days old full backup files from '${_directoryToClean}'."
-        find "${_directoryToClean}" -type f -name "*${fullBackupSuffix}" -mtime +${_maxFullAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-        find "${_directoryToClean}" -type f -name "*${fullBackupLogSuffix}*" -mtime +${_maxFullAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
-        find "${_directoryToClean}" -type f -name "${lastFullBackupMarker}" -mtime +${_maxFullAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        show "Removing more than '${_maxDaysAge}' days old full backup files from '${_directoryToClean}'."
+        find "${_directoryToClean}" -type f -name "*${fullBackupSuffix}" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "*${fullBackupLogSuffix}*" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
+        find "${_directoryToClean}" -type f -name "${lastFullBackupMarker}" -daystart -mtime +${_maxDaysAge} -exec sh -c 'echo "$0"; rm -f "$0"' {} \;
 
         # Remove empty directories and broken symlinks
         find "${_directoryToClean}" -type d -empty -delete
@@ -177,6 +175,8 @@ createBackup() {
     _excludeOptions=$( find "${_sourcePath}" -type f -name "${backupExcludeTag}" -printf "-not \\\( -path \"%h\" -prune \\\) " )
     _excludeOptions="${_excludeOptions} -not \( -name \"lost+found\" -type d -prune \)"
 
+    mkdir -p "${_backupPath}"
+
     if [ ! -z "${_filesAfterDate}" ]; then
         _referenceFilePath="${_backupLogPath}.files_newer_than_marker"
         touch -d "${_filesAfterDate}" "${_referenceFilePath}"
@@ -240,8 +240,8 @@ backupDirectory() {
 
 #### Sanity checks ####
 
-if [ -z "${keepBackupDays##*[!0-9]*}" ] || [ "${keepBackupDays}" -lt "${minBackupMaxAge}" ]; then
-    usage "\nERROR: no or incorrect <max_days_to_keep_backups> given!"
+if [ -z "${keepBackupWeeks##*[!0-9]*}" ] || [ "${keepBackupWeeks}" -lt "${minBackupMaxWeeksAge}" ]; then
+    usage "\nERROR: no or incorrect <max_weeks_to_keep_backups> given!"
 fi
 if [ -z "${whatToBackupPath}" ]; then
     usage "\nERROR: no <source_path> given!"
@@ -264,10 +264,10 @@ fi
 
 #### Main script ####
 
+show "\n-----------------------------------------------------------------------------"
 show "Data backup script running on '$( hostname )' for directory '${whatToBackupPath}'\n"
 
 umask "${backupProcessUmask}"
-mkdir -p "${backupDirectoryPath}"
 
 if [ ! -z "${directoryName}" ]; then
     directoriesToBackup="${directoryName}"
@@ -277,7 +277,7 @@ else
     whatToCleanupPath="${backupDirectoryPath}"
 fi
 
-cleanupOldBackups "${whatToCleanupPath}" "${keepBackupDays}"
+cleanupOldBackups "${whatToCleanupPath}" "${keepBackupWeeks}"
 
 for directory in $directoriesToBackup; do
     if [[ -d "${whatToBackupPath}/${directory}" ]] && [[ ! -L "${whatToBackupPath}/${directory}" ]] && [[ "${directory}" != "lost+found" ]] && [[ ! -f "${whatToBackupPath}/${directory}/${backupExcludeTag}" ]]; then
